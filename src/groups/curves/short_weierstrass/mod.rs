@@ -632,6 +632,72 @@ where
         infinity.select(&Self::zero(), &mul_result)
     }
 
+    /// Computes `bits1 * self + bits2 * p`, where `bits1` and `bits2` are big-endian
+    /// `Boolean` representation of the scalars.
+    ///
+    /// `self` and `p` are non-zero and `self` ≠ `-p`.
+    #[tracing::instrument(target = "r1cs", skip(bits1, bits2))]
+    fn joint_scalar_mul_be<'a>(
+        &self,
+        p: &Self,
+        bits1: impl Iterator<Item = &'a Boolean<<P::BaseField as Field>::BasePrimeField>>,
+        bits2: impl Iterator<Item = &'a Boolean<<P::BaseField as Field>::BasePrimeField>>,
+    ) -> Result<Self, SynthesisError> {
+        // prepare bits decomposition
+        let mut bits1 = bits1.collect::<Vec<_>>();
+        if bits1.len() == 0 {
+            return Ok(Self::zero());
+        }
+        // Remove unnecessary constant zeros in the most-significant positions.
+        bits1 = bits1
+            .into_iter()
+            // We iterate from the MSB down.
+            .rev()
+            // Skip leading zeros, if they are constants.
+            .skip_while(|b| b.is_constant() && (b.value().unwrap() == false))
+            .collect();
+
+        let mut bits2 = bits2.collect::<Vec<_>>();
+        if bits2.len() == 0 {
+            return Ok(Self::zero());
+        }
+        // Remove unnecessary constant zeros in the most-significant positions.
+        bits2 = bits2
+            .into_iter()
+            // We iterate from the MSB down.
+            .rev()
+            // Skip leading zeros, if they are constants.
+            .skip_while(|b| b.is_constant() && (b.value().unwrap() == false))
+            .collect();
+
+        // precompute points
+        let aff1 = self.to_affine()?;
+        let nz_aff1 = NonZeroAffineVar::new(aff1.x, aff1.y);
+
+        let aff2 = p.to_affine()?;
+        let nz_aff2 = NonZeroAffineVar::new(aff2.x, aff2.y);
+
+        let mut aff1_neg = NonZeroAffineVar::new(nz_aff1.x.clone(), nz_aff1.y.negate()?);
+        let mut aff2_neg = NonZeroAffineVar::new(nz_aff2.x.clone(), nz_aff2.y.negate()?);
+        let mut acc = nz_aff1.add_unchecked(&nz_aff2.clone())?;
+
+        // double-and-add loop
+        for (bit1, bit2) in (bits1.iter().rev().skip(1).rev()).zip(bits2.iter().rev().skip(1).rev()) {
+            let mut b = bit1.select(&nz_aff1, &aff1_neg)?;
+            acc = acc.double_and_add_unchecked(&b)?;
+            b = bit2.select(&nz_aff2, &aff2_neg)?;
+            acc = acc.add_unchecked(&b)?;
+        }
+
+        // last bit
+        aff1_neg = aff1_neg.add_unchecked(&acc)?;
+        acc = bits1[bits1.len()-1].select(&acc, &aff1_neg)?;
+        aff2_neg = aff2_neg.add_unchecked(&acc)?;
+        acc = bits2[bits1.len()-1].select(&acc, &aff2_neg)?;
+
+        Ok(acc.into_projective())
+    }
+
     #[tracing::instrument(target = "r1cs", skip(scalar_bits_with_bases))]
     fn precomputed_base_scalar_mul_le<'a, I, B>(
         &mut self,
