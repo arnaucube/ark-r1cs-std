@@ -107,6 +107,30 @@ pub trait CurveVar<C: CurveGroup, ConstraintF: Field>:
         Ok(res)
     }
 
+    /// Computes `bits * self`, where `bits` is a little-endian
+    /// `Boolean` representation of a scalar.
+    ///
+    /// [Joye07](<https://www.iacr.org/archive/ches2007/47270135/47270135.pdf>), Alg.1.
+    #[tracing::instrument(target = "r1cs", skip(bits))]
+    fn scalar_mul_joye_le<'a>(
+        &self,
+        bits: impl Iterator<Item = &'a Boolean<ConstraintF>>,
+    ) -> Result<Self, SynthesisError> {
+        // TODO: in the constant case we should call precomputed_scalar_mul_le,
+        // but rn there's a bug when doing this with TE curves.
+
+        // Computes the standard little-endian double-and-add algorithm
+        // (Algorithm 3.26, Guide to Elliptic Curve Cryptography)
+        let mut res = Self::zero();
+        let mut multiple = self.clone();
+        for bit in bits {
+            let tmp = res.clone() + &multiple;
+            res = bit.select(&tmp, &res)?;
+            multiple.double_in_place()?;
+        }
+        Ok(res)
+    }
+
     /// Computes a `I * self` in place, where `I` is a `Boolean` *little-endian*
     /// representation of the scalar.
     ///
@@ -159,5 +183,64 @@ pub trait CurveVar<C: CurveGroup, ConstraintF: Field>:
             result.precomputed_base_scalar_mul_le(bits.iter().zip(bases))?;
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod test_sw_arithmetic {
+    use crate::{
+        alloc::AllocVar,
+        eq::EqGadget,
+        fields::{fp::FpVar, nonnative::NonNativeFieldVar},
+        groups::{curves::short_weierstrass::ProjectiveVar, CurveVar},
+        ToBitsGadget,
+    };
+    use ark_ec::{
+        short_weierstrass::{Projective, SWCurveConfig},
+        CurveGroup,
+    };
+    use ark_ff::PrimeField;
+    use ark_relations::r1cs::{ConstraintSystem, Result};
+    use ark_std::UniformRand;
+
+    fn point_scalar_mul_joye_satisfied<G>() -> Result<bool>
+    where
+        G: CurveGroup,
+        G::BaseField: PrimeField,
+        G::Config: SWCurveConfig,
+    {
+        let mut rng = ark_std::test_rng();
+
+        let cs = ConstraintSystem::new_ref();
+        let point_in = Projective::<G::Config>::rand(&mut rng);
+        let scalar = G::ScalarField::rand(&mut rng);
+        let point_out = point_in * scalar;
+
+        let point_in =
+            ProjectiveVar::<G::Config, FpVar<G::BaseField>>::new_witness(cs.clone(), || {
+                Ok(point_in)
+            })?;
+        let point_out =
+            ProjectiveVar::<G::Config, FpVar<G::BaseField>>::new_input(cs.clone(), || {
+                Ok(point_out)
+            })?;
+        let scalar = NonNativeFieldVar::new_input(cs.clone(), || Ok(scalar))?;
+
+        let mul = point_in.scalar_mul_joye_le(scalar.to_bits_le().unwrap().iter())?;
+
+        point_out.enforce_equal(&mul)?;
+
+        println!(
+            "#r1cs for scalar_mul_joye_le: {}",
+            cs.num_constraints()
+        );
+
+
+        cs.is_satisfied()
+    }
+
+    #[test]
+    fn test_point_scalar_mul_joye() {
+        assert!(point_scalar_mul_joye_satisfied::<ark_bn254::G1Projective>().unwrap());
     }
 }

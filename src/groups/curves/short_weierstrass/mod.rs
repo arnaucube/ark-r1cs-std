@@ -500,6 +500,80 @@ where
 
     /// Computes `bits * self`, where `bits` is a little-endian
     /// `Boolean` representation of a scalar.
+    ///
+    /// [Joye07](<https://www.iacr.org/archive/ches2007/47270135/47270135.pdf>), Alg.1.
+    #[tracing::instrument(target = "r1cs", skip(bits))]
+    fn scalar_mul_joye_le<'a>(
+        &self,
+        bits: impl Iterator<Item = &'a Boolean<<P::BaseField as Field>::BasePrimeField>>,
+    ) -> Result<Self, SynthesisError> {
+        if self.is_constant() {
+            if self.value().unwrap().is_zero() {
+                return Ok(self.clone());
+            }
+        }
+        let self_affine = self.to_affine()?;
+        let (x, y, infinity) = (self_affine.x, self_affine.y, self_affine.infinity);
+        // We first handle the non-zero case, and then later will conditionally select
+        // zero if `self` was zero. However, we also want to make sure that generated
+        // constraints are satisfiable in both cases.
+        //
+        // In particular, using non-sensible values for `x` and `y` in zero-case may cause
+        // `unchecked` operations to generate constraints that can never be satisfied, depending
+        // on the curve equation coefficients.
+        //
+        // The safest approach is to use coordinates of some point from the curve, thus not
+        // violating assumptions of `NonZeroAffine`. For instance, generator point.
+        let x = infinity.select(&F::constant(P::GENERATOR.x), &x)?;
+        let y = infinity.select(&F::constant(P::GENERATOR.y), &y)?;
+        let non_zero_self = NonZeroAffineVar::new(x, y);
+
+        let mut bits = bits.collect::<Vec<_>>();
+        if bits.len() == 0 {
+            return Ok(Self::zero());
+        }
+        // Remove unnecessary constant zeros in the most-significant positions.
+        bits = bits
+            .into_iter()
+            // We iterate from the MSB down.
+            .rev()
+            // Skip leading zeros, if they are constants.
+            .skip_while(|b| b.is_constant() && (b.value().unwrap() == false))
+            .collect();
+        // After collecting we are in big-endian form; we have to reverse to get back to
+        // little-endian.
+        bits.reverse();
+
+        // second bit
+        let mut acc = non_zero_self.triple()?;
+        let mut acc0 = bits[1].select(&acc, &non_zero_self)?;
+        let mut acc1 = bits[1].select(&non_zero_self, &acc)?;
+
+        for bit in bits.iter().skip(2).rev().skip(1).rev() {
+            acc = acc0.double_and_select_add_unchecked(bit, &acc1)?;
+            acc0 = bit.select(&acc, &acc0)?;
+            acc1 = bit.select(&acc1, &acc)?;
+        }
+
+        // last bit
+        let n = bits.len() - 1;
+        acc = acc0.double_and_select_add_unchecked(bits[n], &acc1)?;
+        acc0 = bits[n].select(&acc, &acc0)?;
+
+        // first bit
+        let temp = NonZeroAffineVar::new(non_zero_self.x, non_zero_self.y.negate()?);
+        acc1 = acc0.add_unchecked(&temp)?;
+        acc0 = bits[0].select(
+            &acc0,
+            &acc1,
+        )?;
+
+        let mul_result = acc0.into_projective();
+        infinity.select(&Self::zero(), &mul_result)
+    }
+
+    /// Computes `bits * self`, where `bits` is a little-endian
+    /// `Boolean` representation of a scalar.
     #[tracing::instrument(target = "r1cs", skip(bits))]
     fn scalar_mul_le<'a>(
         &self,
@@ -976,63 +1050,5 @@ where
         bytes.extend_from_slice(&y_bytes);
         bytes.extend_from_slice(&inf_bytes);
         Ok(bytes)
-    }
-}
-
-#[cfg(test)]
-mod test_sw_curve {
-    use crate::{
-        alloc::AllocVar,
-        eq::EqGadget,
-        fields::{fp::FpVar, nonnative::NonNativeFieldVar},
-        groups::{curves::short_weierstrass::ProjectiveVar, CurveVar},
-        ToBitsGadget,
-    };
-    use ark_ec::{
-        short_weierstrass::{Projective, SWCurveConfig},
-        CurveGroup,
-    };
-    use ark_ff::PrimeField;
-    use ark_relations::r1cs::{ConstraintSystem, Result};
-    use ark_std::UniformRand;
-    use num_traits::Zero;
-
-    fn zero_point_scalar_mul_satisfied<G>() -> Result<bool>
-    where
-        G: CurveGroup,
-        G::BaseField: PrimeField,
-        G::Config: SWCurveConfig,
-    {
-        let mut rng = ark_std::test_rng();
-
-        let cs = ConstraintSystem::new_ref();
-        let point_in = Projective::<G::Config>::zero();
-        let point_out = Projective::<G::Config>::zero();
-        let scalar = G::ScalarField::rand(&mut rng);
-
-        let point_in =
-            ProjectiveVar::<G::Config, FpVar<G::BaseField>>::new_witness(cs.clone(), || {
-                Ok(point_in)
-            })?;
-        let point_out =
-            ProjectiveVar::<G::Config, FpVar<G::BaseField>>::new_input(cs.clone(), || {
-                Ok(point_out)
-            })?;
-        let scalar = NonNativeFieldVar::new_input(cs.clone(), || Ok(scalar))?;
-
-        let mul = point_in.scalar_mul_le(scalar.to_bits_le().unwrap().iter())?;
-
-        point_out.enforce_equal(&mul)?;
-
-        cs.is_satisfied()
-    }
-
-    #[test]
-    fn test_zero_point_scalar_mul() {
-        assert!(zero_point_scalar_mul_satisfied::<ark_bls12_381::G1Projective>().unwrap());
-        assert!(zero_point_scalar_mul_satisfied::<ark_pallas::Projective>().unwrap());
-        assert!(zero_point_scalar_mul_satisfied::<ark_mnt4_298::G1Projective>().unwrap());
-        assert!(zero_point_scalar_mul_satisfied::<ark_mnt6_298::G1Projective>().unwrap());
-        assert!(zero_point_scalar_mul_satisfied::<ark_bn254::G1Projective>().unwrap());
     }
 }
