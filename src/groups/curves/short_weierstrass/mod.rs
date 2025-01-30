@@ -356,7 +356,7 @@ where
         *mul_result += result - subtrahend;
 
         // Now, let's finish off the rest of the bits using our complete formulae
-        for bit in proj_bits {
+        for bit in proj_bits.iter().rev().skip(1).rev() {
             if bit.is_constant() {
                 if *bit == &Boolean::TRUE {
                     *mul_result += &multiple_of_power_of_two.into_projective();
@@ -367,6 +367,21 @@ where
             }
             multiple_of_power_of_two.double_in_place()?;
         }
+
+        // last bit
+        // we don't need the last doubling of multiple_of_power_of_two
+        let n = proj_bits.len();
+        if n >= 1 {
+            if proj_bits[n - 1].is_constant() {
+                if proj_bits[n - 1] == &Boolean::TRUE {
+                    *mul_result += &multiple_of_power_of_two.into_projective();
+                }
+            } else {
+                let temp = &*mul_result + &multiple_of_power_of_two.into_projective();
+                *mul_result = proj_bits[n - 1].select(&temp, &mul_result)?;
+            }
+        }
+
         Ok(())
     }
 }
@@ -518,12 +533,13 @@ where
         // zero if `self` was zero. However, we also want to make sure that generated
         // constraints are satisfiable in both cases.
         //
-        // In particular, using non-sensible values for `x` and `y` in zero-case may cause
-        // `unchecked` operations to generate constraints that can never be satisfied, depending
-        // on the curve equation coefficients.
+        // In particular, using non-sensible values for `x` and `y` in zero-case may
+        // cause `unchecked` operations to generate constraints that can never
+        // be satisfied, depending on the curve equation coefficients.
         //
-        // The safest approach is to use coordinates of some point from the curve, thus not
-        // violating assumptions of `NonZeroAffine`. For instance, generator point.
+        // The safest approach is to use coordinates of some point from the curve, thus
+        // not violating assumptions of `NonZeroAffine`. For instance, generator
+        // point.
         let x = infinity.select(&F::constant(P::GENERATOR.x), &x)?;
         let y = infinity.select(&F::constant(P::GENERATOR.y), &y)?;
         let non_zero_self = NonZeroAffineVar::new(x, y);
@@ -563,10 +579,7 @@ where
         // first bit
         let temp = NonZeroAffineVar::new(non_zero_self.x, non_zero_self.y.negate()?);
         acc1 = acc0.add_unchecked(&temp)?;
-        acc0 = bits[0].select(
-            &acc0,
-            &acc1,
-        )?;
+        acc0 = bits[0].select(&acc0, &acc1)?;
 
         let mul_result = acc0.into_projective();
         infinity.select(&Self::zero(), &mul_result)
@@ -590,12 +603,13 @@ where
         // zero if `self` was zero. However, we also want to make sure that generated
         // constraints are satisfiable in both cases.
         //
-        // In particular, using non-sensible values for `x` and `y` in zero-case may cause
-        // `unchecked` operations to generate constraints that can never be satisfied, depending
-        // on the curve equation coefficients.
+        // In particular, using non-sensible values for `x` and `y` in zero-case may
+        // cause `unchecked` operations to generate constraints that can never
+        // be satisfied, depending on the curve equation coefficients.
         //
-        // The safest approach is to use coordinates of some point from the curve, thus not
-        // violating assumptions of `NonZeroAffine`. For instance, generator point.
+        // The safest approach is to use coordinates of some point from the curve, thus
+        // not violating assumptions of `NonZeroAffine`. For instance, generator
+        // point.
         let x = infinity.select(&F::constant(P::GENERATOR.x), &x)?;
         let y = infinity.select(&F::constant(P::GENERATOR.y), &y)?;
         let non_zero_self = NonZeroAffineVar::new(x, y);
@@ -632,8 +646,8 @@ where
         infinity.select(&Self::zero(), &mul_result)
     }
 
-    /// Computes `bits1 * self + bits2 * p`, where `bits1` and `bits2` are big-endian
-    /// `Boolean` representation of the scalars.
+    /// Computes `bits1 * self + bits2 * p`, where `bits1` and `bits2` are
+    /// big-endian `Boolean` representation of the scalars.
     ///
     /// `self` and `p` are non-zero and `self` ≠ `-p`.
     #[tracing::instrument(target = "r1cs", skip(bits1, bits2))]
@@ -682,7 +696,8 @@ where
         let mut acc = nz_aff1.add_unchecked(&nz_aff2.clone())?;
 
         // double-and-add loop
-        for (bit1, bit2) in (bits1.iter().rev().skip(1).rev()).zip(bits2.iter().rev().skip(1).rev()) {
+        for (bit1, bit2) in (bits1.iter().rev().skip(1).rev()).zip(bits2.iter().rev().skip(1).rev())
+        {
             let mut b = bit1.select(&nz_aff1, &aff1_neg)?;
             acc = acc.double_and_add_unchecked(&b)?;
             b = bit2.select(&nz_aff2, &aff2_neg)?;
@@ -691,9 +706,9 @@ where
 
         // last bit
         aff1_neg = aff1_neg.add_unchecked(&acc)?;
-        acc = bits1[bits1.len()-1].select(&acc, &aff1_neg)?;
+        acc = bits1[bits1.len() - 1].select(&acc, &aff1_neg)?;
         aff2_neg = aff2_neg.add_unchecked(&acc)?;
-        acc = bits2[bits1.len()-1].select(&acc, &aff2_neg)?;
+        acc = bits2[bits1.len() - 1].select(&acc, &aff2_neg)?;
 
         Ok(acc.into_projective())
     }

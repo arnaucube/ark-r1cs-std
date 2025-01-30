@@ -130,8 +130,8 @@ where
         }
     }
 
-    /// Conditionally computes `(self + other) + self` or `(self + other) + other`
-    /// depending on the value of `cond`.
+    /// Conditionally computes `(self + other) + self` or `(self + other) +
+    /// other` depending on the value of `cond`.
     ///
     /// This follows the formulae from [\[ELM03\]](https://arxiv.org/abs/math/0208038).
     #[tracing::instrument(target = "r1cs", skip(self))]

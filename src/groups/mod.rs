@@ -131,8 +131,8 @@ pub trait CurveVar<C: CurveGroup, ConstraintF: Field>:
         Ok(res)
     }
 
-    /// Computes a `I1 * self + I2 * p` in place, where `I1` and `I2` are `Boolean` *big-endian*
-    /// representation of the scalars.
+    /// Computes a `I1 * self + I2 * p` in place, where `I1` and `I2` are
+    /// `Boolean` *big-endian* representation of the scalars.
     #[tracing::instrument(target = "r1cs", skip(bits1, bits2))]
     fn joint_scalar_mul_be<'a>(
         &self,
@@ -142,7 +142,7 @@ pub trait CurveVar<C: CurveGroup, ConstraintF: Field>:
     ) -> Result<Self, SynthesisError> {
         let res1 = self.scalar_mul_le(bits1)?;
         let res2 = p.scalar_mul_le(bits2)?;
-        Ok(res1+res2)
+        Ok(res1 + res2)
     }
 
     /// Computes a `I * self` in place, where `I` is a `Boolean` *little-endian*
@@ -217,6 +217,38 @@ mod test_sw_arithmetic {
     use ark_relations::r1cs::{ConstraintSystem, Result};
     use ark_std::UniformRand;
 
+    fn point_scalar_mul_satisfied<G>() -> Result<bool>
+    where
+        G: CurveGroup,
+        G::BaseField: PrimeField,
+        G::Config: SWCurveConfig,
+    {
+        let mut rng = ark_std::test_rng();
+
+        let cs = ConstraintSystem::new_ref();
+        let point_in = Projective::<G::Config>::rand(&mut rng);
+        let scalar = G::ScalarField::rand(&mut rng);
+        let point_out = point_in * scalar;
+
+        let point_in =
+            ProjectiveVar::<G::Config, FpVar<G::BaseField>>::new_witness(cs.clone(), || {
+                Ok(point_in)
+            })?;
+        let point_out =
+            ProjectiveVar::<G::Config, FpVar<G::BaseField>>::new_input(cs.clone(), || {
+                Ok(point_out)
+            })?;
+        let scalar = NonNativeFieldVar::new_input(cs.clone(), || Ok(scalar))?;
+
+        let mul = point_in.scalar_mul_le(scalar.to_bits_le().unwrap().iter())?;
+
+        point_out.enforce_equal(&mul)?;
+
+        println!("#r1cs for scalar_mul_le: {}", cs.num_constraints());
+
+        cs.is_satisfied()
+    }
+
     fn point_scalar_mul_joye_satisfied<G>() -> Result<bool>
     where
         G: CurveGroup,
@@ -244,11 +276,7 @@ mod test_sw_arithmetic {
 
         point_out.enforce_equal(&mul)?;
 
-        println!(
-            "#r1cs for scalar_mul_joye_le: {}",
-            cs.num_constraints()
-        );
-
+        println!("#r1cs for scalar_mul_joye_le: {}", cs.num_constraints());
 
         cs.is_satisfied()
     }
@@ -283,26 +311,29 @@ mod test_sw_arithmetic {
         let scalar1 = NonNativeFieldVar::new_input(cs.clone(), || Ok(scalar1))?;
         let scalar2 = NonNativeFieldVar::new_input(cs.clone(), || Ok(scalar2))?;
 
-        let res = point_in1.joint_scalar_mul_be(&point_in2, scalar1.to_bits_le().unwrap().iter(), scalar2.to_bits_le().unwrap().iter())?;
+        let res = point_in1.joint_scalar_mul_be(
+            &point_in2,
+            scalar1.to_bits_le().unwrap().iter(),
+            scalar2.to_bits_le().unwrap().iter(),
+        )?;
 
         point_out.enforce_equal(&res)?;
 
-        println!(
-            "#r1cs for joint_scalar_mul: {}",
-            cs.num_constraints()
-        );
-
+        println!("#r1cs for joint_scalar_mul: {}", cs.num_constraints());
 
         cs.is_satisfied()
     }
 
     #[test]
     fn test_point_scalar_mul() {
+        assert!(point_scalar_mul_satisfied::<ark_bn254::G1Projective>().unwrap());
+    }
+    #[test]
+    fn test_point_scalar_mul_joye() {
         assert!(point_scalar_mul_joye_satisfied::<ark_bn254::G1Projective>().unwrap());
     }
     #[test]
     fn test_point_joint_scalar_mul() {
         assert!(point_joint_scalar_mul_satisfied::<ark_bn254::G1Projective>().unwrap());
     }
-
 }
