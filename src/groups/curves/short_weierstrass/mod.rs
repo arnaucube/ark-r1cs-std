@@ -350,10 +350,10 @@ where
         // We can convert to projective safely because the result is guaranteed to be
         // non-zero by the condition on `affine_bits.len()`, and by the fact
         // that `accumulator` is non-zero
-        let result = accumulator.into_projective();
+        *mul_result += accumulator.into_projective();
         // If bits[0] is 0, then we have to subtract `self`; else, we subtract zero.
-        let subtrahend = bits[0].select(&Self::zero(), &initial_acc_value)?;
-        *mul_result += result - subtrahend;
+        let neg = NonZeroAffineVar::new(initial_acc_value.x, initial_acc_value.y.negate()?);
+        *mul_result = bits[0].select(mul_result, &mul_result.add_mixed(&neg)?)?;
 
         // Now, let's finish off the rest of the bits using our complete formulae
         for bit in proj_bits.iter().rev().skip(1).rev() {
