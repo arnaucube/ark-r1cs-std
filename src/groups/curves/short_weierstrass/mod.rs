@@ -359,10 +359,10 @@ where
         for bit in proj_bits.iter().rev().skip(1).rev() {
             if bit.is_constant() {
                 if *bit == &Boolean::TRUE {
-                    *mul_result += &multiple_of_power_of_two.into_projective();
+                    *mul_result = mul_result.add_mixed(&multiple_of_power_of_two)?;
                 }
             } else {
-                let temp = &*mul_result + &multiple_of_power_of_two.into_projective();
+                let temp = mul_result.add_mixed(&multiple_of_power_of_two)?;
                 *mul_result = bit.select(&temp, &mul_result)?;
             }
             multiple_of_power_of_two.double_in_place()?;
@@ -374,10 +374,10 @@ where
         if n >= 1 {
             if proj_bits[n - 1].is_constant() {
                 if proj_bits[n - 1] == &Boolean::TRUE {
-                    *mul_result += &multiple_of_power_of_two.into_projective();
+                    *mul_result = mul_result.add_mixed(&multiple_of_power_of_two)?;
                 }
             } else {
-                let temp = &*mul_result + &multiple_of_power_of_two.into_projective();
+                let temp = mul_result.add_mixed(&multiple_of_power_of_two)?;
                 *mul_result = proj_bits[n - 1].select(&temp, &mul_result)?;
             }
         }
